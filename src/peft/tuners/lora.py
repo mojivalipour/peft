@@ -1307,7 +1307,11 @@ class DyLoRA(nn.Linear):
         a LoRA compatible DyLoRA
         dim: the target rank dimension that we want to make dynamic
         '''
-        super(DyLoRA, self).__init__()        
+        super(DyLoRA, self).__init__(
+            in_features=in_features,
+            out_features=out_features,
+            **kwargs
+        )        
         self.current_rank = self.maximum_rank = out_features
         self.full_weight = self.weight
         self.full_bias = self.bias
@@ -1332,4 +1336,4 @@ class DyLoRA(nn.Linear):
         self.scalar = scalar
 
     def forward(self, inputs, mode: bool = False):
-        return F.linear(inputs, T(self.weight), bias=self.bias) * self.scalar
+        return F.linear(inputs, self.weight, bias=self.bias) * self.scalar
