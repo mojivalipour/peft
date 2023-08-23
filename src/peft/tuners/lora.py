@@ -43,8 +43,7 @@ from .tuners_utils import BaseTuner, BaseTunerLayer
 
 if is_bnb_available():
     import bitsandbytes as bnb
-
-
+    
 @dataclass
 class LoraConfig(PeftConfig):
     """
@@ -150,8 +149,8 @@ class LoraLayer(BaseTunerLayer):
         self.lora_dropout.update(nn.ModuleDict({adapter_name: lora_dropout_layer}))
         # Actual trainable parameters
         if r > 0:
-            self.lora_A.update(nn.ModuleDict({adapter_name: nn.Linear(self.in_features, r, bias=False)}))
-            self.lora_B.update(nn.ModuleDict({adapter_name: nn.Linear(r, self.out_features, bias=False)}))
+            self.lora_A.update(nn.ModuleDict({adapter_name: DyLoRA(self.in_features, r, dim=1, bias=False)}))
+            self.lora_B.update(nn.ModuleDict({adapter_name: DyLoRA(r, self.out_features, dim=0, bias=False)}))
             self.scaling[adapter_name] = lora_alpha / r
         if init_lora_weights:
             self.reset_lora_parameters(adapter_name)
@@ -907,7 +906,7 @@ class Linear(nn.Linear, LoraLayer):
                 self.lora_B[self.active_adapter](
                     self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                 )
-                * self.scaling[self.active_adapter]
+                * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
             )
         else:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
@@ -977,7 +976,7 @@ class Embedding(nn.Embedding, LoraLayer):
                     self.scale_grad_by_freq,
                     self.sparse,
                 )
-                result += (after_A @ self.lora_embedding_B[self.active_adapter].T) * self.scaling[self.active_adapter]
+                result += (after_A @ self.lora_embedding_B[self.active_adapter].T) * self.scaling[self.active_adapter] * self.lora_embedding_B[self.active_adapter].get_maximum_dimension() / self.lora_embedding_B[self.active_adapter].get_rank()
             return result
         else:
             return nn.Embedding.forward(self, x)
@@ -1095,7 +1094,7 @@ class Conv2d(nn.Conv2d, LoraLayer):
                 self.lora_B[self.active_adapter](
                     self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                 )
-                * self.scaling[self.active_adapter]
+                * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
             )
         else:
             result = F.conv2d(
@@ -1160,14 +1159,14 @@ if is_bnb_available():
                         self.lora_B[self.active_adapter](
                             self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                         ).to(expected_dtype)
-                        * self.scaling[self.active_adapter]
+                        * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
                     )
                 else:
                     output = (
                         self.lora_B[self.active_adapter](
                             self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                         )
-                        * self.scaling[self.active_adapter]
+                        * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
                     )
                 result += output
             return result
@@ -1218,14 +1217,14 @@ if is_bnb_available():
                             self.lora_B[self.active_adapter](
                                 self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                             ).to(expected_dtype)
-                            * self.scaling[self.active_adapter]
+                            * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
                         )
                     else:
                         output = (
                             self.lora_B[self.active_adapter](
                                 self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                             )
-                            * self.scaling[self.active_adapter]
+                            * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
                         )
                     result += output
                 return result
@@ -1264,14 +1263,14 @@ class QuantLinear(torch.nn.Module, LoraLayer):
                     self.lora_B[self.active_adapter](
                         self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                     ).to(expected_dtype)
-                    * self.scaling[self.active_adapter]
+                    * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
                 )
             else:
                 output = (
                     self.lora_B[self.active_adapter](
                         self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
                     )
-                    * self.scaling[self.active_adapter]
+                    * self.scaling[self.active_adapter] * self.lora_B[self.active_adapter].get_maximum_dimension() / self.lora_B[self.active_adapter].get_rank()
                 )
             result += output
         return result
@@ -1281,3 +1280,56 @@ class QuantLinear(torch.nn.Module, LoraLayer):
     #     if adapter_name in self.lora_A.keys():
     #         torch.nn.init.xavier_uniform_(self.lora_A[adapter_name].weight)
     #         torch.nn.init.zeros_(self.lora_B[adapter_name].weight)
+
+
+# Copyright (C) 2022. Huawei Technologies Co., Ltd. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.   
+class DyLoRA(nn.Linear):
+    def __init__(
+        self, 
+        in_features: int, 
+        out_features: int, 
+        dim: int = 0,
+        **kwargs
+    ):
+        '''
+        a LoRA compatible DyLoRA
+        dim: the target rank dimension that we want to make dynamic
+        '''
+        super(DyLoRA, self).__init__()        
+        self.current_rank = self.maximum_rank = out_features
+        self.full_weight = self.weight
+        self.full_bias = self.bias
+        self.dim = dim
+        self.scalar = 1.0
+
+    def get_dimension(self):
+        return self.maximum_rank
+    
+    def get_rank(self):
+        return self.current_rank
+    
+    def set_rank(self, rank, scalar=1.0):
+        # a valid rank is anything between 1 and maximum_rank
+        self.current_rank = rank
+        if self.dim == 1:
+            self.weight = self.full_weight[:,:self.get_rank()]
+        elif self.dim == 0:
+            self.weight = self.full_weight[:self.get_rank(),:]
+        if self.full_bias:
+            self.bias = self.full_bias[:self.get_rank()]
+        self.scalar = scalar
+
+    def forward(self, inputs, mode: bool = False):
+        return F.linear(inputs, T(self.weight), bias=self.bias) * self.scalar
