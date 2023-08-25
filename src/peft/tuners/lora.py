@@ -149,8 +149,8 @@ class LoraLayer(BaseTunerLayer):
         self.lora_dropout.update(nn.ModuleDict({adapter_name: lora_dropout_layer}))
         # Actual trainable parameters
         if r > 0:
-            self.lora_A.update(nn.ModuleDict({adapter_name: DyLoRA(self.in_features, r, dim=1, bias=False)}))
-            self.lora_B.update(nn.ModuleDict({adapter_name: DyLoRA(r, self.out_features, dim=0, bias=False)}))
+            self.lora_A.update(nn.ModuleDict({adapter_name: DyLoRA(self.in_features, r, dim=0, bias=False)}))
+            self.lora_B.update(nn.ModuleDict({adapter_name: DyLoRA(r, self.out_features, dim=1, bias=False)}))
             self.scaling[adapter_name] = lora_alpha / r
         if init_lora_weights:
             self.reset_lora_parameters(adapter_name)
@@ -700,8 +700,8 @@ class LoraModel(BaseTuner):
                             current_adapter_lora_B = target.lora_embedding_B[adapter]
                         loras_A.append(current_adapter_lora_A.data * weight * target.scaling[adapter])
                         loras_B.append(current_adapter_lora_B.data)
-                    torch.cat(loras_A, dim=0, out=target_lora_A.data)
-                    torch.cat(loras_B, dim=1, out=target_lora_B.data)
+                    torch.cat(loras_A, dim=1, out=target_lora_A.data)
+                    torch.cat(loras_B, dim=0, out=target_lora_B.data)
                 elif combination_type == "svd":
                     target_lora_A.data, target_lora_B.data = self._svd_weighted_adapter(
                         adapters,
@@ -1328,11 +1328,11 @@ class DyLoRA(nn.Linear):
         # a valid rank is anything between 1 and maximum_rank
         self.current_rank = rank
         if self.dim == 1:
-            self.weight = self.full_weight[:,:self.get_rank()]
+            self.weight = torch.nn.Parameter(self.full_weight[:,:self.get_rank()]).to(self.weight.device)
         elif self.dim == 0:
-            self.weight = self.full_weight[:self.get_rank(),:]
+            self.weight = torch.nn.Parameter(self.full_weight[:self.get_rank(),:]).to(self.weight.device) 
         if self.full_bias:
-            self.bias = self.full_bias[:self.get_rank()]
+            self.bias = torch.nn.Parameter(self.full_bias[:self.get_rank()]).to(self.bias.device)
         self.scalar = scalar
 
     def forward(self, inputs, mode: bool = False):
